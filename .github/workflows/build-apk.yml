@@ -24,17 +24,48 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # If the project was uploaded inside a sub-folder, bring it up to the repo root.
+      # Finds the project automatically. Files already in the repo always win;
+      # anything missing is filled in from a nested folder or from an archive
+      # (.zip, .tar.gz, .tgz, .tar, .7z) uploaded anywhere in the repo.
       - name: Locate project
+        shell: bash
         run: |
-          if [ ! -f package.json ]; then
-            CFG=$(find . -maxdepth 4 -name capacitor.config.json -not -path '*/node_modules/*' | head -1)
-            if [ -z "$CFG" ]; then echo "::error::capacitor.config.json not found - upload ALL project files"; exit 1; fi
-            DIR=$(dirname "$CFG")
-            echo "Project found in $DIR"
-            cp -a "$DIR"/. .
+          set -e
+          TMP="$RUNNER_TEMP/unpacked"; mkdir -p "$TMP"
+
+          # 1. unpack every archive found in the repo
+          n=0
+          while IFS= read -r -d '' a; do
+            n=$((n+1)); d="$TMP/$n"; mkdir -p "$d"
+            echo "Unpacking $a"
+            case "${a,,}" in
+              *.zip)            unzip -q -o "$a" -d "$d" || true ;;
+              *.tar.gz|*.tgz)   tar -xzf "$a" -C "$d" || true ;;
+              *.tar)            tar -xf "$a" -C "$d" || true ;;
+              *.7z)             7z x -y -o"$d" "$a" > /dev/null || true ;;
+            esac
+          done < <(find . -maxdepth 4 -type f \( -iname '*.zip' -o -iname '*.tar.gz' -o -iname '*.tgz' -o -iname '*.tar' -o -iname '*.7z' \) -not -path './.git/*' -not -path '*/node_modules/*' -print0)
+
+          # 2. copy project files up to the repo root WITHOUT overwriting anything already there
+          merge() {
+            CFG=$(find "$1" -maxdepth 5 -name capacitor.config.json -not -path '*/node_modules/*' -not -path '*/__MACOSX/*' | head -1)
+            if [ -n "$CFG" ]; then
+              DIR=$(dirname "$CFG"); echo "Merging project from $DIR"
+              cp -an "$DIR"/. . || true
+            fi
+          }
+          # project in a sub-folder of the repo
+          if [ ! -f package.json ] || [ ! -f capacitor.config.json ]; then merge .; fi
+          # project inside archives
+          for d in "$TMP"/*/; do [ -d "$d" ] && merge "$d"; done
+
+          # 3. final check
+          if [ ! -f package.json ] || [ ! -d web ]; then
+            echo "::error::Project files not found. Upload opener-app.zip (or all project files) to the repo."
+            ls -la
+            exit 1
           fi
-          ls -la
+          echo "Project ready:"; ls -la
 
       - uses: actions/setup-node@v4
         with:

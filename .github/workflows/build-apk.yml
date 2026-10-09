@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Finds the project automatically. Files already in the repo always win;
-      # anything missing is filled in from a nested folder or from an archive
+      # Finds the project automatically. Loose files in the repo always win;
+      # anything missing is taken from a nested folder or from an archive
       # (.zip, .tar.gz, .tgz, .tar, .7z) uploaded anywhere in the repo.
       - name: Locate project
         shell: bash
@@ -58,6 +58,18 @@ jobs:
           if [ ! -f package.json ] || [ ! -f capacitor.config.json ]; then merge .; fi
           # project inside archives
           for d in "$TMP"/*/; do [ -d "$d" ] && merge "$d"; done
+
+          # 2b. loose files uploaded outside the zip (repo root or one folder deep)
+          #     replace the same-named project file; if there is no loose file, the zip version is used
+          for dir in web web/vendor scripts android-src; do
+            [ -d "$dir" ] || continue
+            for f in "$dir"/*; do
+              [ -f "$f" ] || continue
+              base=$(basename "$f")
+              loose=$(find . -maxdepth 2 -type f -name "$base" -not -path './.git/*' -not -path './node_modules/*' -not -path './web/*' -not -path './scripts/*' -not -path './android-src/*' -not -path './www/*' -not -path './android/*' -not -path './.github/*' | awk '{print length($0) " " $0}' | sort -n | head -1 | cut -d' ' -f2-)
+              if [ -n "$loose" ]; then echo "Using loose file $loose for $f"; cp -f "$loose" "$f"; fi
+            done
+          done
 
           # 3. final check
           if [ ! -f package.json ] || [ ! -d web ]; then
